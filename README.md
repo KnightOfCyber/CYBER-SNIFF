@@ -1,1 +1,1 @@
-# CYBER-SNIFF
+CYBER-SNIFF is a Windows desktop network monitoring and threat detection tool that captures live packets, generates Warning/Critical alerts, logs incidents, and automatically blocks malicious IPs using Windows Firewall rules.
