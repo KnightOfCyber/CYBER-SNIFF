@@ -85,7 +85,7 @@ pip install psutil
 ### Step 1 – Clone the Repository
 
 ```
-git clone https://github.com/yourusername/cyber-sniff.git
+git clone https://github.com/KnightOfCyber/CYBER-SNIFF.git
 ```
 
 ### Step 2 – Open in VS Code
@@ -193,6 +193,10 @@ Developed as a **Cyber Security Mini Project**
 Students:
 - P. Pavan Durga Satish
 - Team Members
+- T.Venkatesh
+- G.Pavani
+- D.Pujitha
+- Y.Karthik
 
 ---
 
