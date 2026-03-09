@@ -1,11 +1,15 @@
 CYBER-SNIFF
 Advanced Network Security Monitoring and Auto-Blocking Tool
 
+
 CYBER-SNIFF is a real-time network monitoring and intrusion detection tool developed in Python. The tool captures live network packets, analyzes traffic behavior, detects suspicious activity such as port scanning and brute-force attempts, and automatically blocks malicious IP addresses using the Windows Firewall.
+
 
 This project was developed as a cybersecurity mini project to demonstrate how packet sniffing and automated response systems can improve network security.
 
+
 Features
+
 
 • Real-time packet monitoring
 • Detection of suspicious network behavior
@@ -16,14 +20,18 @@ Features
 • Background system tray operation
 • Severity classification (Normal / Warning / Critical)
 
+
 Technologies Used
+
 Technology	Purpose
 Python	Core programming language
 Scapy	Packet sniffing and network analysis
 PyQt5	Graphical User Interface
 Windows Firewall	Automatic IP blocking
 Nmap	Testing and attack simulation
+
 Project Structure
+
 CYBER-SNIFF
 │
 ├── main_sniffer.py
@@ -34,15 +42,21 @@ CYBER-SNIFF
 ├── icons/
 │
 └── README.md
+
 main_sniffer.py
+
 
 Main application interface and GUI.
 
+
 sniffer_thread.py
+
 
 Handles packet capturing and threat detection logic.
 
+
 defense_actions.py
+
 
 Performs security actions such as:
 
@@ -50,13 +64,18 @@ Performs security actions such as:
 • Blocking attacker IP addresses
 • Network utilities (flush DNS / renew IP)
 
+
 How CYBER-SNIFF Works
+
 
 The tool captures live packets from the selected network interface.
 
+
 Traffic data is analyzed for suspicious patterns.
 
+
 The detection engine identifies activities such as:
+
 
 Port scanning
 
@@ -64,13 +83,17 @@ Brute force attempts
 
 Abnormal traffic spikes
 
+
 If a critical threat is detected:
+
 
 The attacker IP is blocked automatically using Windows Firewall.
 
 The event is logged in security_log.txt.
 
+
 System Architecture
+
 Network Traffic
       ↓
 Packet Sniffer (Scapy)
@@ -84,28 +107,39 @@ Alert System
 Firewall Blocking
       ↓
 Security Log Storage
+
+
 Requirements
 
+
 Python 3.9 or later
+
 
 Required libraries:
 
 pip install scapy
 pip install pyqt5
 
+
 You may also need:
+
 
 pip install psutil
 How to Run the Project (VS Code)
 Step 1 – Clone the Repository
-git clone https://github.com/yourusername/cyber-sniff.git
+git clone https://github.com/KnightOfCyber/CYBER-SNIFF.git
+
 Step 2 – Open in VS Code
+
 
 Open the project folder in Visual Studio Code.
 
+
 Step 3 – Install Dependencies
 
+
 Run this in the terminal:
+
 
 pip install -r requirements.txt
 
