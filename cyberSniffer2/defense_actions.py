@@ -1,24 +1,27 @@
 import subprocess
 import time
 from datetime import datetime
+import os
+import sys
 
-LOG_FILE = "security_log.txt"
+BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
-# Cooldown system (prevents popup spam / crashing)
+WHITELIST_FILE = os.path.join(BASE_DIR, "whitelist.txt")
+LOG_FILE = os.path.join(BASE_DIR, "security_log.txt")
+
 ALERT_COOLDOWN_SECONDS = 10
 _last_alert_time = {}
 
 
-def can_show_alert(attacker_ip):
-    """Return True if alert popup can be shown (cooldown based)."""
-    now = time.time()
-    last = _last_alert_time.get(attacker_ip, 0)
+def load_whitelist():
+    if not os.path.exists(WHITELIST_FILE):
+        return set()
 
-    if now - last >= ALERT_COOLDOWN_SECONDS:
-        _last_alert_time[attacker_ip] = now
-        return True
-
-    return False
+    try:
+        with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    except Exception:
+        return set()
 
 
 def log_alert(ip, mac, proto, port, reason):
@@ -32,27 +35,34 @@ def log_alert(ip, mac, proto, port, reason):
         f.write(entry)
 
 
+def get_rule_name(ip):
+    return f"BLOCK_CYBER_{ip.replace('.', '_').replace(':', '_')}"
+
+
 def is_ip_blocked(ip):
-    """Check if IP is already blocked in Windows Firewall."""
+    rule_name = get_rule_name(ip)
+
     try:
-        cmd = f'netsh advfirewall firewall show rule name=all | findstr "{ip}"'
+        cmd = f'netsh advfirewall firewall show rule name="{rule_name}"'
         output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
-        return ip in output
-    except:
+        return "No rules match" not in output
+    except Exception:
         return False
 
 
 def block_ip(ip):
-    # Ignore invalid / local system IPs
-    if ip in ["0.0.0.0", "-", "127.0.0.1", "::1"]:
+    whitelist = load_whitelist()
+
+    if ip in whitelist:
+        print(f"[WHITELIST] Skipping block for {ip}")
         return
 
     if is_ip_blocked(ip):
         return
 
-    rule_name = f"BLOCK_CYBER_{ip.replace('.', '_').replace(':', '_')}"
+    rule_name = get_rule_name(ip)
 
-    cmd = [
+    cmd_in = [
         "netsh", "advfirewall", "firewall", "add", "rule",
         f"name={rule_name}",
         "dir=in",
@@ -61,7 +71,19 @@ def block_ip(ip):
         "enable=yes"
     ]
 
-    subprocess.run(cmd, capture_output=True, text=True, shell=True)
+    cmd_out = [
+        "netsh", "advfirewall", "firewall", "add", "rule",
+        f"name={rule_name}",
+        "dir=out",
+        "action=block",
+        f"remoteip={ip}",
+        "enable=yes"
+    ]
+
+    subprocess.run(cmd_in, capture_output=True, text=True, shell=True)
+    subprocess.run(cmd_out, capture_output=True, text=True, shell=True)
+
+    print(f"[BLOCKED] {ip} blocked inbound + outbound")
 
 
 def reset_network_settings(action):
