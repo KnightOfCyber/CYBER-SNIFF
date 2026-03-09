@@ -1,4 +1,6 @@
 import time
+import os
+import sys
 from datetime import datetime
 from collections import defaultdict, deque
 
@@ -6,6 +8,21 @@ from PyQt5.QtCore import QThread, QObject, pyqtSignal
 from scapy.all import AsyncSniffer, IP, IPv6, TCP, UDP, Ether
 
 from defense_actions import is_ip_blocked
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+WHITELIST_FILE = os.path.join(BASE_DIR, "whitelist.txt")
+
+
+def load_whitelist_file():
+    if not os.path.exists(WHITELIST_FILE):
+        return set()
+
+    try:
+        with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    except Exception:
+        return set()
 
 
 class SnifferSignal(QObject):
@@ -26,21 +43,11 @@ class SnifferThread(QThread):
         self.sniffer = None
         self.running = True
 
-        # Tracking
         self.ip_packet_times = defaultdict(lambda: deque(maxlen=5000))
         self.ip_ports_seen = defaultdict(lambda: deque(maxlen=500))
         self.ip_critical_hits = defaultdict(lambda: deque(maxlen=1000))
 
-        # Critical ports
         self.critical_ports = {21, 22, 23, 135, 139, 445, 3389, 5900, 5985, 5986}
-
-        # Whitelist (router + localhost + your PC)
-        self.whitelist = {
-            "127.0.0.1",
-            "::1",
-            "192.168.1.1",   # router
-            "192.168.1.7"    # your PC
-        }
 
     def stop(self):
         self.running = False
@@ -67,20 +74,23 @@ class SnifferThread(QThread):
                 self.sniffer.stop()
 
         except Exception as e:
-            # DO NOT TRIGGER SECURITY ALERT ON ERROR/STOP
             print("Sniffer Error:", e)
 
     def is_local_ip(self, ip):
         return ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.16.")
 
+    def get_dynamic_whitelist(self):
+        wl = load_whitelist_file()
+        wl.update({"127.0.0.1", "::1"})
+        return wl
+
     def classify_severity(self, sport, dport, src_ip):
         now = time.time()
+        whitelist = self.get_dynamic_whitelist()
 
-        # Whitelist ignore
-        if src_ip in self.whitelist:
-            return "NORMAL", "Whitelisted Device"
+        if src_ip in whitelist:
+            return "WHITELISTED", "Trusted IP (Whitelist)"
 
-        # If already blocked, don't treat it as CRITICAL again
         if is_ip_blocked(src_ip):
             return "BLOCKED", "Attacker IP already blocked"
 
@@ -90,11 +100,9 @@ class SnifferThread(QThread):
         if dport.isdigit():
             ports.append(int(dport))
 
-        # FTP/Telnet always critical
         if 21 in ports or 23 in ports:
             return "CRITICAL", "Unencrypted Login Port (FTP/Telnet)"
 
-        # Port scan detection
         if dport.isdigit():
             dp = int(dport)
             self.ip_ports_seen[src_ip].append((dp, now))
@@ -107,7 +115,6 @@ class SnifferThread(QThread):
             elif unique_ports >= 7:
                 return "WARNING", "Suspicious Port Scan Activity"
 
-        # Brute force detection on critical ports
         for p in ports:
             if p in self.critical_ports:
                 self.ip_critical_hits[src_ip].append(now)
@@ -118,7 +125,6 @@ class SnifferThread(QThread):
                 elif len(recent_hits) >= 12:
                     return "WARNING", f"High Access Attempts on Port {p}"
 
-        # Flood detection for 80/443 ONLY for non-local IPs
         if (80 in ports or 443 in ports) and not self.is_local_ip(src_ip):
             self.ip_packet_times[src_ip].append(now)
             recent = [t for t in self.ip_packet_times[src_ip] if now - t <= 3]
@@ -146,7 +152,6 @@ class SnifferThread(QThread):
             if Ether in pkt:
                 src_mac = pkt[Ether].src
 
-            # IPv4 / IPv6
             if IP in pkt:
                 src_ip = pkt[IP].src
                 dst_ip = pkt[IP].dst
@@ -157,7 +162,6 @@ class SnifferThread(QThread):
                 dst_ip = pkt[IPv6].dst
                 proto = "IPv6"
 
-            # TCP / UDP
             if TCP in pkt:
                 proto = "TCP"
                 sport = str(pkt[TCP].sport)
@@ -176,6 +180,8 @@ class SnifferThread(QThread):
                 severity_label = "⚠ WARNING"
             elif severity == "BLOCKED":
                 severity_label = "🛑 BLOCKED"
+            elif severity == "WHITELISTED":
+                severity_label = "✅ TRUSTED"
             else:
                 severity_label = "NORMAL"
 
@@ -194,17 +200,10 @@ class SnifferThread(QThread):
             if self.packet_data:
                 self.packet_data.emit(row)
 
-            # Only trigger alert ONCE when critical
             if severity == "CRITICAL" and self.alert_signal:
-                # If already blocked, skip popup/alert
-                if not is_ip_blocked(src_ip):
-                    self.alert_signal.emit(
-                        src_ip,
-                        src_mac,
-                        proto,
-                        dport,
-                        reason
-                    )
+                whitelist = self.get_dynamic_whitelist()
+                if src_ip not in whitelist and not is_ip_blocked(src_ip):
+                    self.alert_signal.emit(src_ip, src_mac, proto, dport, reason)
 
         except Exception:
             pass
