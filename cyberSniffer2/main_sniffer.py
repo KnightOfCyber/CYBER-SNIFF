@@ -1,19 +1,14 @@
 import os
 import sys
 import time
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    try:
-        base_path = sys._MEIPASS   # PyInstaller temp folder
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
+import socket
+import threading
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton,
-    QLabel, QComboBox, QMessageBox, QLineEdit
+    QLabel, QComboBox, QMessageBox, QLineEdit,
+    QInputDialog, QSystemTrayIcon, QMenu, QAction
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
@@ -24,7 +19,40 @@ from scapy.arch.windows import get_windows_if_list
 from sniffer_thread import SnifferThread, SnifferSignal
 from defense_actions import log_alert, block_ip, reset_network_settings
 
+
 API_KEY = os.getenv("ABUSEIPDB_API_KEY")
+
+BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+WHITELIST_FILE = os.path.join(BASE_DIR, "whitelist.txt")
+
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = BASE_DIR
+
+    return os.path.join(base_path, relative_path)
+
+
+def load_whitelist():
+    if not os.path.exists(WHITELIST_FILE):
+        return set()
+
+    try:
+        with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    except Exception:
+        return set()
+
+
+def save_whitelist(ip_set):
+    try:
+        with open(WHITELIST_FILE, "w", encoding="utf-8") as f:
+            for ip in sorted(ip_set):
+                f.write(ip + "\n")
+    except Exception as e:
+        print("Whitelist Save Error:", e)
 
 
 class CyberSniffer(QWidget):
@@ -41,29 +69,27 @@ class CyberSniffer(QWidget):
 
         self.sniffer = None
 
-        # Anti-popup spam protection
         self.alerted_ips = set()
         self.last_alert_time = {}
-        self.alert_cooldown = 20  # seconds
+        self.alert_cooldown = 5
 
         self.build_ui()
         self.apply_style()
+
+        self.setup_tray_icon()
 
     def build_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
-        # ---------------------------
-        # TOP BAR
-        # ---------------------------
         top_bar = QHBoxLayout()
 
         self.interface_label = QLabel("Interface:")
         self.interface_label.setFixedWidth(70)
 
         self.interface_box = QComboBox()
-        self.interface_box.setFixedWidth(420)
+        self.interface_box.setFixedWidth(350)
 
         interfaces = get_windows_if_list()
         if interfaces:
@@ -77,6 +103,25 @@ class CyberSniffer(QWidget):
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("e.g. tcp port 80 or host 192.168.1.1")
         self.filter_input.setFixedHeight(32)
+        self.filter_input.setMinimumWidth(350)
+
+        self.flush_btn = QPushButton("DNSFlush")
+        self.flush_btn.setIcon(QIcon(resource_path("icons/flush.png")))
+        self.flush_btn.setIconSize(QSize(18, 18))
+        self.flush_btn.setFixedSize(90, 38)
+        self.flush_btn.clicked.connect(self.flush_dns)
+
+        self.renew_btn = QPushButton("IPrenew")
+        self.renew_btn.setIcon(QIcon(resource_path("icons/renew.png")))
+        self.renew_btn.setIconSize(QSize(18, 18))
+        self.renew_btn.setFixedSize(100, 38)
+        self.renew_btn.clicked.connect(self.renew_ip)
+
+        self.whitelist_btn = QPushButton("Whitelist")
+        self.whitelist_btn.setIcon(QIcon(resource_path("icons/whitelist.png")))
+        self.whitelist_btn.setIconSize(QSize(26, 26))
+        self.whitelist_btn.setFixedSize(140, 38)
+        self.whitelist_btn.clicked.connect(self.manage_whitelist)
 
         self.start_btn = QPushButton()
         self.start_btn.setIcon(QIcon(resource_path("icons/play.png")))
@@ -102,6 +147,12 @@ class CyberSniffer(QWidget):
         top_bar.addSpacing(10)
         top_bar.addWidget(self.filter_label)
         top_bar.addWidget(self.filter_input)
+        top_bar.addSpacing(8)
+
+        top_bar.addWidget(self.flush_btn)
+        top_bar.addWidget(self.renew_btn)
+        top_bar.addWidget(self.whitelist_btn)
+
         top_bar.addSpacing(10)
         top_bar.addWidget(self.start_btn)
         top_bar.addWidget(self.stop_btn)
@@ -109,43 +160,11 @@ class CyberSniffer(QWidget):
 
         main_layout.addLayout(top_bar)
 
-        # ---------------------------
-        # ACTION BAR
-        # ---------------------------
-        action_bar = QHBoxLayout()
-
-        self.action_label = QLabel("Diagnostics & Defense:")
-        self.action_label.setFixedWidth(200)
-
-        self.flush_btn = QPushButton("Flush DNS Cache")
-        self.flush_btn.setIcon(QIcon(resource_path("icons/flush.png")))
-        self.flush_btn.setIconSize(QSize(24, 24))
-        self.flush_btn.setFixedHeight(38)
-        self.flush_btn.clicked.connect(self.flush_dns)
-
-        self.renew_btn = QPushButton("Renew IP Address")
-        self.renew_btn.setIcon(QIcon(resource_path("icons/renew.png")))
-        self.renew_btn.setIconSize(QSize(24, 24))
-        self.renew_btn.setFixedHeight(38)
-        self.renew_btn.clicked.connect(self.renew_ip)
-
-        action_bar.addWidget(self.action_label)
-        action_bar.addWidget(self.flush_btn)
-        action_bar.addWidget(self.renew_btn)
-
-        main_layout.addLayout(action_bar)
-
-        # ---------------------------
-        # STATUS BAR
-        # ---------------------------
         self.status_label = QLabel("System Status: Ready. Please select an interface and click Start.")
         self.status_label.setAlignment(Qt.AlignLeft)
         self.status_label.setFixedHeight(28)
         main_layout.addWidget(self.status_label)
 
-        # ---------------------------
-        # PACKET TABLE
-        # ---------------------------
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
             "Timestamp", "Source IP", "Destination IP", "Protocol",
@@ -171,38 +190,40 @@ class CyberSniffer(QWidget):
         self.setLayout(main_layout)
 
     def apply_style(self):
-        self.setStyleSheet("""
-            QWidget {
+        bg_path = resource_path("terminal_pattern.png").replace("\\", "/")
+
+        self.setStyleSheet(f"""
+            QWidget {{
                 background-color: #0a0f1e;
                 color: #d8d8d8;
                 font-family: Consolas;
                 font-size: 13px;
-            }
+            }}
 
-            QLabel {
+            QLabel {{
                 color: #ff4b7d;
                 font-weight: bold;
-            }
+            }}
 
-            QLineEdit {
+            QLineEdit {{
                 background-color: #10182d;
                 border: 1px solid #2a3b6a;
                 padding: 6px;
                 border-radius: 4px;
                 color: #ffffff;
                 font-size: 13px;
-            }
+            }}
 
-            QComboBox {
+            QComboBox {{
                 background-color: #10182d;
                 border: 1px solid #2a3b6a;
                 padding: 5px;
                 border-radius: 4px;
                 color: white;
                 font-size: 13px;
-            }
+            }}
 
-            QPushButton {
+            QPushButton {{
                 background-color: #e94057;
                 border: none;
                 padding: 6px;
@@ -210,38 +231,98 @@ class CyberSniffer(QWidget):
                 color: white;
                 border-radius: 3px;
                 font-size: 13px;
-            }
+            }}
 
-            QPushButton:hover {
+            QPushButton:hover {{
                 background-color: #ff4b7d;
-            }
+            }}
 
-            QPushButton:disabled {
+            QPushButton:disabled {{
                 background-color: #444;
                 color: #999;
-            }
+            }}
 
-            QTableWidget {
+            QTableWidget {{
                 border: 1px solid #1d2b4f;
                 gridline-color: #2a3b6a;
                 font-size: 13px;
-               border-image: url(""" + resource_path("terminal_pattern.png").replace("\\", "/") + """) 0 0 0 0 stretch stretch;
+                border-image: url("{bg_path}") 0 0 0 0 stretch stretch;
+            }}
 
-            }
-
-            QHeaderView::section {
+            QHeaderView::section {{
                 background-color: #2d004d;
                 color: #ffcc00;
                 font-weight: bold;
                 border: 1px solid #4a0080;
                 padding: 7px;
                 font-size: 13px;
-            }
+            }}
         """)
 
-    # ---------------------------
-    # BUTTON ACTIONS
-    # ---------------------------
+    def setup_tray_icon(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon(resource_path("app_icon.ico")))
+        self.tray_icon.setToolTip("CYBER-SNIFF Running in Background")
+
+        tray_menu = QMenu()
+
+        show_action = QAction("Show Window", self)
+        show_action.triggered.connect(self.show_window)
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.exit_app)
+
+        tray_menu.addAction(show_action)
+        tray_menu.addSeparator()
+        tray_menu.addAction(exit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.tray_clicked)
+        self.tray_icon.show()
+
+    def tray_clicked(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.show_window()
+
+    def show_window(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def exit_app(self):
+        try:
+            if self.sniffer:
+                self.sniffer.stop()
+        except Exception:
+            pass
+
+        QApplication.quit()
+
+    def closeEvent(self, event):
+        if hasattr(self, "tray_icon"):
+            event.ignore()
+            self.hide()
+        else:
+            event.accept()
+
+    def manage_whitelist(self):
+        whitelist = load_whitelist()
+
+        ip, ok = QInputDialog.getText(
+            self,
+            "Whitelist Manager",
+            "Enter trusted IP to whitelist (example: 192.168.1.10):"
+        )
+
+        if ok and ip.strip():
+            ip = ip.strip()
+            whitelist.add(ip)
+            save_whitelist(whitelist)
+            QMessageBox.information(self, "Whitelist Updated", f"IP Added: {ip}")
+
     def start_sniffing(self):
         iface = self.interface_box.currentText()
 
@@ -252,9 +333,6 @@ class CyberSniffer(QWidget):
         bpf_filter = self.filter_input.text().strip()
         if bpf_filter == "":
             bpf_filter = None
-
-        self.status_label.setText("System Status: Running packet capture...")
-        self.status_label.setStyleSheet("color: #00ffcc; font-weight: bold;")
 
         self.sniffer = SnifferThread(iface, bpf_filter, API_KEY)
         self.sniffer.packet_data = self.signal.packet_data
@@ -269,32 +347,20 @@ class CyberSniffer(QWidget):
             self.sniffer.stop()
             self.sniffer.wait(1500)
 
-        self.status_label.setText("System Status: Stopped.")
-        self.status_label.setStyleSheet("color: orange; font-weight: bold;")
-
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def clear_table(self):
         self.table.setRowCount(0)
-        self.status_label.setText("System Status: Cleared packet table.")
-        self.status_label.setStyleSheet("color: #00ffcc; font-weight: bold;")
 
     def flush_dns(self):
         msg = reset_network_settings("flushdns")
         QMessageBox.information(self, "Flush DNS Cache", msg)
-        self.status_label.setText("System Status: DNS cache flushed.")
-        self.status_label.setStyleSheet("color: #00ffcc; font-weight: bold;")
 
     def renew_ip(self):
         msg = reset_network_settings("renew")
         QMessageBox.information(self, "Renew IP Address", msg)
-        self.status_label.setText("System Status: IP renewed.")
-        self.status_label.setStyleSheet("color: #00ffcc; font-weight: bold;")
 
-    # ---------------------------
-    # TABLE UPDATE
-    # ---------------------------
     def add_row(self, row):
         r = self.table.rowCount()
         self.table.insertRow(r)
@@ -305,21 +371,20 @@ class CyberSniffer(QWidget):
         severity = row[7]
 
         if "CRITICAL" in severity:
-           bg = QtGui.QColor("#e74c3c")
-           fg = QtGui.QColor("white")
-
-        elif "WARNING" in severity:
-          bg = QtGui.QColor("#f39c12")
-          fg = QtGui.QColor("black")
-
-        elif "BLOCKED" in severity:
-            bg = QtGui.QColor("#7b1e1e")  # dark red
+            bg = QtGui.QColor("#e74c3c")
             fg = QtGui.QColor("white")
-
+        elif "WARNING" in severity:
+            bg = QtGui.QColor("#f39c12")
+            fg = QtGui.QColor("black")
+        elif "BLOCKED" in severity:
+            bg = QtGui.QColor("#7b1e1e")
+            fg = QtGui.QColor("white")
+        elif "TRUSTED" in severity:
+            bg = QtGui.QColor("#2ecc71")
+            fg = QtGui.QColor("black")
         else:
-             bg = QtGui.QColor("#05070d")
-             fg = QtGui.QColor("white")
-
+            bg = QtGui.QColor("#05070d")
+            fg = QtGui.QColor("white")
 
         for c in range(self.table.columnCount()):
             item = self.table.item(r, c)
@@ -329,36 +394,30 @@ class CyberSniffer(QWidget):
 
         self.table.scrollToBottom()
 
-    # ---------------------------
-    # ALERT HANDLER (FIXED)
-    # ---------------------------
     def handle_alert(self, ip, mac, proto, port, reason):
+        from defense_actions import is_ip_blocked
 
         if ip in ["0.0.0.0", "-", "127.0.0.1", "::1"]:
             return
 
-        now = time.time()
-
-        # If already blocked, don't popup again
-        if ip in self.alerted_ips:
-            log_alert(ip, mac, proto, port, reason)
+        whitelist = load_whitelist()
+        if ip in whitelist:
             return
 
-        # Cooldown check (avoid popup spam)
+        now = time.time()
+
         if ip in self.last_alert_time:
             if now - self.last_alert_time[ip] < self.alert_cooldown:
-                log_alert(ip, mac, proto, port, reason)
                 return
+
+        if is_ip_blocked(ip):
+            return
 
         self.last_alert_time[ip] = now
 
         log_alert(ip, mac, proto, port, reason)
-        block_ip(ip)
 
-        self.alerted_ips.add(ip)
-
-        self.status_label.setText(f"System Status: 🚨 THREAT BLOCKED ({ip})")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
+        threading.Thread(target=block_ip, args=(ip,), daemon=True).start()
 
         QMessageBox.critical(
             self,
@@ -373,7 +432,17 @@ class CyberSniffer(QWidget):
 
 
 if __name__ == "__main__":
+
+    single_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        single_socket.bind(("127.0.0.1", 47831))
+    except OSError:
+        sys.exit(0)
+
     app = QApplication(sys.argv)
+    QApplication.setQuitOnLastWindowClosed(False)
+
     gui = CyberSniffer()
     gui.show()
+
     sys.exit(app.exec_())
